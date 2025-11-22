@@ -10,29 +10,33 @@
     "test:watch": "jest --watch"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "mongoose": "^7.6.3",
-    "dotenv": "^16.3.1",
+    "aws-sdk": "^2.1450.0",
+    "bcryptjs": "^2.4.3",
+    "cloudinary": "^2.8.0",
     "cors": "^2.8.5",
-    "firebase-admin": "^11.11.0",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
     "express-validator": "^7.0.1",
+    "firebase-admin": "^11.11.0",
+    "google-auth-library": "^10.5.0",
     "helmet": "^7.0.0",
     "jsonwebtoken": "^9.0.0",
-    "bcryptjs": "^2.4.3",
-    "swagger-ui-express": "^4.6.3",
-    "swagger-jsdoc": "^6.2.8",
-    "aws-sdk": "^2.1450.0",
+    "mongoose": "^7.6.3",
     "multer": "^1.4.5-lts.1",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^4.6.3",
     "uuid": "^9.0.0"
   },
   "devDependencies": {
     "jest": "^29.7.0",
-    "supertest": "^6.3.3",
     "mongodb-memory-server": "^9.1.1",
-    "nodemon": "^3.0.1"
+    "nodemon": "^3.0.1",
+    "supertest": "^6.3.3"
   },
   "jest": {
     "testEnvironment": "node",
-    "setupFilesAfterEnv": ["./tests/setup.js"]
+    "setupFilesAfterEnv": [
+      "./tests/setup.js"
+    ]
   }
-} 
+}

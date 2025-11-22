@@ -1,11 +1,14 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const Expense = require('../models/expense.model');
 const Group = require('../models/group.model');
 const { authenticateUser } = require('../middleware/auth.middleware');
 const { createNotification } = require('../services/notification.service');
 const Settlement = require('../models/settlement.model');
 const User = require('../models/user.model');
+const { upload } = require('../middleware/upload.middleware');
+const { uploadFile, getExpenseReceiptFolder } = require('../utils/upload.util');
 
 /**
  * @swagger
@@ -99,42 +102,146 @@ const User = require('../models/user.model');
  * @swagger
  * /expenses/create:
  *   post:
- *     summary: Create a new expense
+ *     summary: Create a new expense with optional receipt/bill upload
  *     tags: [Expenses]
  *     security:
  *       - BearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
- *         application/json:
+ *         multipart/form-data:
  *           schema:
- *             $ref: '#/components/schemas/Expense'
+ *             type: object
+ *             required:
+ *               - groupId
+ *               - amount
+ *               - description
+ *               - date
+ *               - splitAmong
+ *             properties:
+ *               groupId:
+ *                 type: string
+ *               amount:
+ *                 type: number
+ *               description:
+ *                 type: string
+ *               date:
+ *                 type: string
+ *                 format: date
+ *               splitAmong:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *               image:
+ *                 type: string
+ *                 format: binary
+ *                 description: Optional receipt/bill image (field name must be 'image')
  *     responses:
  *       201:
  *         description: Expense created successfully
  */
-router.post('/create', authenticateUser, async (req, res) => {
+router.post('/create', authenticateUser, upload, async (req, res) => {
   try {
-    const { groupId, amount, description, date, splitAmong, invoice } = req.body;
+    const { groupId, amount, description, date, splitAmong } = req.body;
+    let invoice = null;
+    
+    // Validate ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(groupId)) {
+      return res.status(400).json({ 
+        status: 'error',
+        message: 'Invalid group ID format' 
+      });
+    }
+    
+    // Parse and validate amount
+    const amountNum = typeof amount === 'string' ? parseFloat(amount) : amount;
+    if (!amountNum || isNaN(amountNum) || amountNum <= 0) {
+      return res.status(400).json({ 
+        status: 'error',
+        message: 'Amount must be a positive number' 
+      });
+    }
+    
+    // Parse splitAmong if it's a string (from multipart/form-data)
+    let splitAmongArray;
+    try {
+      splitAmongArray = typeof splitAmong === 'string' ? JSON.parse(splitAmong) : splitAmong;
+    } catch (error) {
+      splitAmongArray = Array.isArray(splitAmong) ? splitAmong : [];
+    }
     
     // Validate splitAmong
-    if (!splitAmong || !Array.isArray(splitAmong) || splitAmong.length === 0) {
-      return res.status(400).json({ error: 'splitAmong must be a non-empty array' });
+    if (!splitAmongArray || !Array.isArray(splitAmongArray) || splitAmongArray.length === 0) {
+      return res.status(400).json({ 
+        status: 'error',
+        message: 'splitAmong must be a non-empty array' 
+      });
+    }
+    
+    // Validate all splitAmong are valid emails
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const invalidEmails = splitAmongArray.filter(email => !emailRegex.test(email));
+    if (invalidEmails.length > 0) {
+      return res.status(400).json({ 
+        status: 'error',
+        message: 'All emails in splitAmong must be valid email addresses' 
+      });
+    }
+    
+    // Validate description
+    if (!description || typeof description !== 'string' || description.trim().length === 0) {
+      return res.status(400).json({ 
+        status: 'error',
+        message: 'Description is required' 
+      });
+    }
+    
+    // Validate date
+    if (!date || isNaN(Date.parse(date))) {
+      return res.status(400).json({ 
+        status: 'error',
+        message: 'Valid date is required' 
+      });
     }
     
     // Verify group exists and user is a member
     const group = await Group.findById(groupId);
     if (!group || !group.members.includes(req.user.email)) {
-      return res.status(403).json({ error: 'Access denied' });
+      return res.status(403).json({ 
+        status: 'error',
+        message: 'Access denied' 
+      });
+    }
+
+    // Upload receipt/bill if provided
+    if (req.file) {
+      // Validate file size
+      if (req.file.size > 5 * 1024 * 1024) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'File size too large. Maximum size is 5MB'
+        });
+      }
+
+      try {
+        const folder = getExpenseReceiptFolder(groupId);
+        invoice = await uploadFile(req.file, folder);
+      } catch (error) {
+        console.error('Receipt upload error:', error);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Error uploading receipt: ' + error.message
+        });
+      }
     }
 
     const expense = new Expense({
       groupId,
-      amount,
+      amount: amountNum,
       description,
       date,
       paidBy: req.user.email,
-      splitAmong,
+      splitAmong: splitAmongArray,
       invoice
     });
 
@@ -145,13 +252,13 @@ router.post('/create', authenticateUser, async (req, res) => {
       .filter(email => email !== req.user.email)
       .map(email => {
         let message;
-        if (splitAmong.includes(email)) {
+        if (splitAmongArray.includes(email)) {
           // For members who need to pay
-          const share = amount / splitAmong.length;
-          message = `${req.user.name} added an expense of ${group.currency} ${amount} in ${group.name}. Your share: ${group.currency} ${share.toFixed(2)}`;
+          const share = amountNum / splitAmongArray.length;
+          message = `${req.user.name} added an expense of ${group.currency} ${amountNum} in ${group.name}. Your share: ${group.currency} ${share.toFixed(2)}`;
         } else {
           // For members who are not part of the split
-          message = `${req.user.name} added an expense of ${group.currency} ${amount} in ${group.name}`;
+          message = `${req.user.name} added an expense of ${group.currency} ${amountNum} in ${group.name}`;
         }
         
         return createNotification(
@@ -161,8 +268,8 @@ router.post('/create', authenticateUser, async (req, res) => {
           groupId,
           {
             expenseId: expense._id,
-            amount,
-            share: splitAmong.includes(email) ? amount / splitAmong.length : 0,
+            amount: amountNum,
+            share: splitAmongArray.includes(email) ? amountNum / splitAmongArray.length : 0,
             paidBy: req.user.email,
             description
           }
@@ -172,12 +279,18 @@ router.post('/create', authenticateUser, async (req, res) => {
     await Promise.all(notificationPromises);
 
     res.status(201).json({
-      expenseId: expense._id,
-      message: 'Expense added successfully'
+      status: 'success',
+      data: {
+        expenseId: expense._id,
+        message: 'Expense added successfully'
+      }
     });
   } catch (error) {
     console.error('Create expense error:', error);
-    res.status(500).json({ error: 'Error creating expense' });
+    res.status(500).json({ 
+      status: 'error',
+      message: 'Error creating expense' 
+    });
   }
 });
 
@@ -235,42 +348,6 @@ router.post('/create', authenticateUser, async (req, res) => {
  *                           amount:
  *                             type: number
  */
-router.get('/:groupId', authenticateUser, async (req, res) => {
-  try {
-    const { groupId } = req.params;
-    
-    // Verify group exists and user is a member
-    const group = await Group.findById(groupId);
-    if (!group || !group.members.includes(req.user.email)) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
-
-    // Get all expenses for the group
-    const expenses = await Expense.find({ groupId })
-      .sort({ date: -1 });
-
-    // Get all settlements for the group
-    const settlements = await Settlement.find({ groupId })
-      .sort({ date: -1 });
-
-    // Calculate balances
-    const balanceCalculations = calculateBalances(
-      req.user.email,
-      group.members,
-      expenses,
-      settlements
-    );
-    
-    res.json({
-      expenses,
-      settlements,
-      balances: balanceCalculations
-    });
-  } catch (error) {
-    console.error('Get expenses error:', error);
-    res.status(500).json({ error: 'Error fetching expenses' });
-  }
-});
 
 /**
  * @swagger
@@ -316,10 +393,21 @@ router.get('/:groupId/summary', authenticateUser, async (req, res) => {
   try {
     const { groupId } = req.params;
     
+    // Validate ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(groupId)) {
+      return res.status(400).json({ 
+        status: 'error',
+        message: 'Invalid group ID format' 
+      });
+    }
+    
     // Verify group exists and user is a member
     const group = await Group.findById(groupId);
     if (!group || !group.members.includes(req.user.email)) {
-      return res.status(403).json({ error: 'Access denied' });
+      return res.status(403).json({ 
+        status: 'error',
+        message: 'Access denied' 
+      });
     }
 
     const expenses = await Expense.find({ groupId });
@@ -328,7 +416,61 @@ router.get('/:groupId/summary', authenticateUser, async (req, res) => {
     res.json(summary);
   } catch (error) {
     console.error('Get expense summary error:', error);
-    res.status(500).json({ error: 'Error fetching expense summary' });
+    res.status(500).json({ 
+      status: 'error',
+      message: 'Error fetching expense summary' 
+    });
+  }
+});
+
+router.get('/:groupId', authenticateUser, async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    
+    // Validate ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(groupId)) {
+      return res.status(400).json({ 
+        status: 'error',
+        message: 'Invalid group ID format' 
+      });
+    }
+    
+    // Verify group exists and user is a member
+    const group = await Group.findById(groupId);
+    if (!group || !group.members.includes(req.user.email)) {
+      return res.status(403).json({ 
+        status: 'error',
+        message: 'Access denied' 
+      });
+    }
+
+    // Get all expenses for the group
+    const expenses = await Expense.find({ groupId })
+      .sort({ date: -1 });
+
+    // Get all settlements for the group
+    const settlements = await Settlement.find({ groupId })
+      .sort({ date: -1 });
+
+    // Calculate balances
+    const balanceCalculations = calculateBalances(
+      req.user.email,
+      group.members,
+      expenses,
+      settlements
+    );
+    
+    res.json({
+      expenses,
+      settlements,
+      balances: balanceCalculations
+    });
+  } catch (error) {
+    console.error('Get expenses error:', error);
+    res.status(500).json({ 
+      status: 'error',
+      message: 'Error fetching expenses' 
+    });
   }
 });
 
@@ -352,22 +494,44 @@ router.get('/:groupId/summary', authenticateUser, async (req, res) => {
  */
 router.delete('/:expenseId', authenticateUser, async (req, res) => {
   try {
-    const expense = await Expense.findById(req.params.expenseId);
+    const { expenseId } = req.params;
+    
+    // Validate ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(expenseId)) {
+      return res.status(400).json({ 
+        status: 'error',
+        message: 'Invalid expense ID format' 
+      });
+    }
+    
+    const expense = await Expense.findById(expenseId);
     if (!expense) {
-      return res.status(404).json({ error: 'Expense not found' });
+      return res.status(404).json({ 
+        status: 'error',
+        message: 'Expense not found' 
+      });
     }
 
     // Verify user is the one who created the expense
     if (expense.paidBy !== req.user.email) {
-      return res.status(403).json({ error: 'Only the expense creator can delete it' });
+      return res.status(403).json({ 
+        status: 'error',
+        message: 'Only the expense creator can delete it' 
+      });
     }
 
-    await Expense.findByIdAndDelete(req.params.expenseId);
+    await Expense.findByIdAndDelete(expenseId);
     
-    res.json({ message: 'Expense deleted successfully' });
+    res.json({ 
+      status: 'success',
+      message: 'Expense deleted successfully' 
+    });
   } catch (error) {
     console.error('Delete expense error:', error);
-    res.status(500).json({ error: 'Error deleting expense' });
+    res.status(500).json({ 
+      status: 'error',
+      message: 'Error deleting expense' 
+    });
   }
 });
 
@@ -391,15 +555,31 @@ router.delete('/:expenseId', authenticateUser, async (req, res) => {
  */
 router.get('/detail/:expenseId', authenticateUser, async (req, res) => {
   try {
-    const expense = await Expense.findById(req.params.expenseId);
+    const { expenseId } = req.params;
+    
+    // Validate ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(expenseId)) {
+      return res.status(400).json({ 
+        status: 'error',
+        message: 'Invalid expense ID format' 
+      });
+    }
+    
+    const expense = await Expense.findById(expenseId);
     if (!expense) {
-      return res.status(404).json({ error: 'Expense not found' });
+      return res.status(404).json({ 
+        status: 'error',
+        message: 'Expense not found' 
+      });
     }
 
     // Get group to verify membership
     const group = await Group.findById(expense.groupId);
     if (!group || !group.members.includes(req.user.email)) {
-      return res.status(403).json({ error: 'Access denied' });
+      return res.status(403).json({ 
+        status: 'error',
+        message: 'Access denied' 
+      });
     }
 
     // Get user details for paidBy and splitAmong
@@ -416,8 +596,11 @@ router.get('/detail/:expenseId', authenticateUser, async (req, res) => {
     }, {});
 
     // Calculate individual shares
-    if (!expense.splitAmong || expense.splitAmong.length === 0) {
-      return res.status(400).json({ error: 'Expense has invalid splitAmong data' });
+    if (!expense.splitAmong || expense.splitAmong.length === 0 || !expense.amount || expense.amount <= 0) {
+      return res.status(400).json({ 
+        status: 'error',
+        message: 'Expense has invalid splitAmong data' 
+      });
     }
     
     const perPersonAmount = expense.amount / expense.splitAmong.length;
@@ -444,7 +627,10 @@ router.get('/detail/:expenseId', authenticateUser, async (req, res) => {
     });
   } catch (error) {
     console.error('Get expense detail error:', error);
-    res.status(500).json({ error: 'Error fetching expense details' });
+    res.status(500).json({ 
+      status: 'error',
+      message: 'Error fetching expense details' 
+    });
   }
 });
 
@@ -458,20 +644,23 @@ function calculateBalances(currentUserEmail, groupMembers, expenses, settlements
 
   // Calculate from expenses
   expenses.forEach(expense => {
-    // Safety check: skip if splitAmong is empty
-    if (!expense.splitAmong || expense.splitAmong.length === 0) {
+    // Safety check: skip if splitAmong is empty or amount is invalid
+    if (!expense.splitAmong || expense.splitAmong.length === 0 || !expense.amount || expense.amount <= 0) {
       return;
     }
     
     const perPersonAmount = expense.amount / expense.splitAmong.length;
     
-    // Add amount to person who paid
-    if (balances[expense.paidBy] !== undefined) {
-      balances[expense.paidBy] += expense.amount;
+    // Calculate what each person owes (excluding the payer)
+    const payingMembers = expense.splitAmong.filter(member => member !== expense.paidBy);
+    
+    // Add amount to person who paid (only from people who are not the payer)
+    if (balances[expense.paidBy] !== undefined && payingMembers.length > 0) {
+      balances[expense.paidBy] += perPersonAmount * payingMembers.length;
     }
     
-    // Subtract from people who need to pay
-    expense.splitAmong.forEach(member => {
+    // Subtract from people who need to pay (excluding the payer)
+    payingMembers.forEach(member => {
       if (balances[member] !== undefined) {
         balances[member] -= perPersonAmount;
       }
@@ -535,6 +724,11 @@ function calculateExpenseSummary(groupMembers, expenses) {
   });
 
   expenses.forEach(expense => {
+    // Safety check: skip if amount is invalid
+    if (!expense.amount || expense.amount <= 0) {
+      return;
+    }
+    
     // Calculate total expenses
     summary.totalExpenses += expense.amount;
 

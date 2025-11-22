@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
+const { OAuth2Client } = require('google-auth-library');
 const User = require('../models/user.model');
-const { generateToken } = require('../utils/jwt.util');
+const { generateToken, generateRefreshToken, verifyRefreshToken } = require('../utils/jwt.util');
 const { authenticateUser } = require('../middleware/auth.middleware');
 const { 
   validateSignup, 
@@ -10,7 +11,7 @@ const {
   validate 
 } = require('../middleware/validation.middleware');
 const { upload } = require('../middleware/upload.middleware');
-const { uploadToS3 } = require('../utils/s3.util');
+const { uploadFile } = require('../utils/upload.util');
 
 /**
  * @swagger
@@ -72,9 +73,12 @@ const { uploadToS3 } = require('../utils/s3.util');
  *                   type: string
  *                 profilePicture:
  *                   type: string
- *             token:
+ *             accessToken:
  *               type: string
- *               description: JWT authentication token
+ *               description: JWT access token (expires in 15 minutes)
+ *             refreshToken:
+ *               type: string
+ *               description: JWT refresh token (expires in 7 days)
  *     ErrorResponse:
  *       type: object
  *       properties:
@@ -277,9 +281,105 @@ const { uploadToS3 } = require('../utils/s3.util');
 
 /**
  * @swagger
- * /auth/upload-image:
+ * /auth/google:
  *   post:
- *     summary: Upload an image to S3
+ *     summary: Authenticate with Google OAuth
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - credential
+ *             properties:
+ *               credential:
+ *                 type: string
+ *                 description: Google ID token from @react-oauth/google
+ *     responses:
+ *       200:
+ *         description: Authentication successful
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   enum: [success]
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     user:
+ *                       $ref: '#/components/schemas/User'
+ *                     accessToken:
+ *                       type: string
+ *                       description: JWT access token (expires in 15 minutes)
+ *                     refreshToken:
+ *                       type: string
+ *                       description: JWT refresh token (expires in 7 days)
+ *       400:
+ *         description: Invalid token or missing credential
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+
+/**
+ * @swagger
+ * /auth/refresh:
+ *   post:
+ *     summary: Refresh access token using refresh token
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - refreshToken
+ *             properties:
+ *               refreshToken:
+ *                 type: string
+ *                 description: Refresh token received from login
+ *     responses:
+ *       200:
+ *         description: Token refreshed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   enum: [success]
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     accessToken:
+ *                       type: string
+ *       401:
+ *         description: Invalid refresh token
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+
+/**
+ * @swagger
+ * /auth/upload-profile-picture:
+ *   post:
+ *     summary: Upload profile picture
  *     tags: [Auth]
  *     security:
  *       - BearerAuth: []
@@ -295,14 +395,10 @@ const { uploadToS3 } = require('../utils/s3.util');
  *               image:
  *                 type: string
  *                 format: binary
- *                 description: Image file to upload
- *               type:
- *                 type: string
- *                 enum: [profile, invoice]
- *                 description: Type of image being uploaded
+ *                 description: Profile picture image file to upload
  *     responses:
  *       200:
- *         description: Image uploaded successfully
+ *         description: Profile picture uploaded successfully
  *         content:
  *           application/json:
  *             schema:
@@ -317,7 +413,13 @@ const { uploadToS3 } = require('../utils/s3.util');
  *                     url:
  *                       type: string
  *                       format: uri
- *                       description: URL of the uploaded image
+ *                       description: Public URL of the uploaded profile picture
+ *                     size:
+ *                       type: number
+ *                       description: File size in bytes
+ *                     type:
+ *                       type: string
+ *                       description: MIME type of the file
  *       400:
  *         description: Invalid file type or size
  *         content:
@@ -362,8 +464,9 @@ router.post('/signup', validateSignup, validate, async (req, res) => {
 
     await user.save();
 
-    // Generate token
-    const token = generateToken(user._id);
+    // Generate tokens
+    const accessToken = generateToken(user._id);
+    const refreshToken = generateRefreshToken(user._id);
 
     res.status(201).json({
       status: 'success',
@@ -375,7 +478,8 @@ router.post('/signup', validateSignup, validate, async (req, res) => {
           email,
           profilePicture
         },
-        token
+        accessToken,
+        refreshToken
       }
     });
   } catch (error) {
@@ -401,6 +505,14 @@ router.post('/login', validateLogin, validate, async (req, res) => {
       });
     }
 
+    // Check if user is OAuth-only (no password)
+    if (user.authProvider === 'google' || !user.password) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'This account uses Google sign-in. Please use Google to log in.'
+      });
+    }
+
     // Verify password
     const isPasswordValid = await user.comparePassword(password);
     if (!isPasswordValid) {
@@ -410,8 +522,9 @@ router.post('/login', validateLogin, validate, async (req, res) => {
       });
     }
 
-    // Generate token
-    const token = generateToken(user._id);
+    // Generate tokens
+    const accessToken = generateToken(user._id);
+    const refreshToken = generateRefreshToken(user._id);
 
     res.json({
       status: 'success',
@@ -422,7 +535,8 @@ router.post('/login', validateLogin, validate, async (req, res) => {
           email: user.email,
           profilePicture: user.profilePicture
         },
-        token
+        accessToken,
+        refreshToken
       }
     });
   } catch (error) {
@@ -488,9 +602,9 @@ router.patch('/profile', authenticateUser, validateProfileUpdate, validate, asyn
   }
 });
 
-// Upload image to S3
+// Upload profile picture
 router.post(
-  '/upload-image',
+  '/upload-profile-picture',
   authenticateUser,
   upload,
   async (req, res) => {
@@ -510,8 +624,7 @@ router.post(
         });
       }
 
-      const type = req.body.type || 'general';
-      const imageUrl = await uploadToS3(req.file, type);
+      const imageUrl = await uploadFile(req.file, 'profiles');
 
       res.json({
         status: 'success',
@@ -522,13 +635,168 @@ router.post(
         }
       });
     } catch (error) {
-      console.error('Image upload error:', error);
+      console.error('Profile picture upload error:', error);
       res.status(500).json({
         status: 'error',
-        message: error.message || 'Error uploading image'
+        message: error.message || 'Error uploading profile picture'
       });
     }
   }
 );
+
+// Google OAuth authentication
+// Note: For ID token verification (from @react-oauth/google), we only need CLIENT_ID, not CLIENT_SECRET.
+// The google-auth-library uses Google's public keys to verify the token signature.
+// CLIENT_SECRET is only needed for server-side OAuth flow (authorization code exchange).
+router.post('/google', async (req, res) => {
+  try {
+    const { credential } = req.body;
+
+    if (!credential) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Google credential is required'
+      });
+    }
+
+    // Validate that GOOGLE_CLIENT_ID is configured
+    if (!process.env.GOOGLE_CLIENT_ID) {
+      return res.status(500).json({
+        status: 'error',
+        message: 'Google OAuth is not configured'
+      });
+    }
+
+    // Initialize Google OAuth client (only CLIENT_ID needed for ID token verification)
+    const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+
+    // Verify the ID token
+    // This uses Google's public keys to verify the token signature and expiration
+    let ticket;
+    try {
+      ticket = await client.verifyIdToken({
+        idToken: credential,
+        audience: process.env.GOOGLE_CLIENT_ID // Ensures token was issued for our app
+      });
+    } catch (error) {
+      console.error('Google token verification error:', error);
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid Google token'
+      });
+    }
+
+    const payload = ticket.getPayload();
+    const { sub: googleId, email, name, picture } = payload;
+
+    if (!email) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Email not provided by Google'
+      });
+    }
+
+    // Find or create user
+    let user = await User.findOne({ 
+      $or: [
+        { email },
+        { googleId }
+      ]
+    });
+
+    if (user) {
+      // Update user if they're logging in with Google for the first time
+      if (!user.googleId) {
+        user.googleId = googleId;
+        user.authProvider = 'google';
+        if (!user.profilePicture && picture) {
+          user.profilePicture = picture;
+        }
+        await user.save();
+      } else if (picture && user.profilePicture !== picture) {
+        // Update profile picture if it changed
+        user.profilePicture = picture;
+        await user.save();
+      }
+    } else {
+      // Create new user
+      user = new User({
+        email,
+        name: name || email.split('@')[0],
+        profilePicture: picture || null,
+        googleId,
+        authProvider: 'google',
+        password: null // OAuth users don't have passwords
+      });
+      await user.save();
+    }
+
+    // Generate tokens
+    const accessToken = generateToken(user._id);
+    const refreshToken = generateRefreshToken(user._id);
+
+    res.json({
+      status: 'success',
+      data: {
+        user: {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          profilePicture: user.profilePicture
+        },
+        accessToken,
+        refreshToken
+      }
+    });
+  } catch (error) {
+    console.error('Google OAuth error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Error during Google authentication'
+    });
+  }
+});
+
+// Refresh access token
+router.post('/refresh', async (req, res) => {
+  try {
+    const { refreshToken } = req.body;
+
+    if (!refreshToken) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Refresh token is required'
+      });
+    }
+
+    // Verify refresh token
+    const decoded = verifyRefreshToken(refreshToken);
+    
+    // Verify user still exists
+    const user = await User.findById(decoded.userId);
+    if (!user) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'User not found'
+      });
+    }
+
+    // Generate new access token
+    const accessToken = generateToken(user._id);
+
+    res.json({
+      status: 'success',
+      data: {
+        accessToken
+      }
+    });
+  } catch (error) {
+    console.error('Refresh token error:', error);
+    res.status(401).json({
+      status: 'error',
+      message: 'Invalid or expired refresh token'
+    });
+  }
+});
 
 module.exports = router; 

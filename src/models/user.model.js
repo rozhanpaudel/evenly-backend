@@ -13,7 +13,19 @@ const userSchema = new mongoose.Schema({
   },
   password: {
     type: String,
-    required: true
+    required: function() {
+      return !this.googleId; // Password required only if not OAuth user
+    }
+  },
+  googleId: {
+    type: String,
+    sparse: true, // Allows multiple null values but enforces uniqueness for non-null values
+    unique: true
+  },
+  authProvider: {
+    type: String,
+    enum: ['local', 'google'],
+    default: 'local'
   },
   profilePicture: String,
   createdAt: {
@@ -22,9 +34,12 @@ const userSchema = new mongoose.Schema({
   }
 });
 
-// Hash password before saving
+// Hash password before saving (only for local auth users)
 userSchema.pre('save', async function(next) {
-  if (!this.isModified('password')) return next();
+  // Skip password hashing for OAuth users or if password is not modified
+  if (!this.isModified('password') || this.authProvider === 'google' || !this.password) {
+    return next();
+  }
   
   try {
     const salt = await bcrypt.genSalt(10);
@@ -35,8 +50,12 @@ userSchema.pre('save', async function(next) {
   }
 });
 
-// Method to compare password
+// Method to compare password (only for local auth users)
 userSchema.methods.comparePassword = async function(candidatePassword) {
+  // OAuth users don't have passwords
+  if (this.authProvider === 'google' || !this.password) {
+    return false;
+  }
   return bcrypt.compare(candidatePassword, this.password);
 };
 

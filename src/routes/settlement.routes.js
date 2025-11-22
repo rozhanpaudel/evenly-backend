@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const Settlement = require('../models/settlement.model');
 const Group = require('../models/group.model');
 const { authenticateUser } = require('../middleware/auth.middleware');
@@ -85,10 +86,45 @@ router.post('/create', authenticateUser, async (req, res) => {
   try {
     const { groupId, paidTo, amount, date } = req.body;
     
+    // Validate ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(groupId)) {
+      return res.status(400).json({ 
+        status: 'error',
+        message: 'Invalid group ID format' 
+      });
+    }
+    
+    // Validate amount
+    if (!amount || typeof amount !== 'number' || amount <= 0) {
+      return res.status(400).json({ 
+        status: 'error',
+        message: 'Amount must be a positive number' 
+      });
+    }
+    
+    // Validate date
+    if (!date || isNaN(Date.parse(date))) {
+      return res.status(400).json({ 
+        status: 'error',
+        message: 'Valid date is required' 
+      });
+    }
+    
+    // Validate paidTo
+    if (!paidTo || typeof paidTo !== 'string') {
+      return res.status(400).json({ 
+        status: 'error',
+        message: 'paidTo is required' 
+      });
+    }
+    
     // Verify group exists and both users are members
     const group = await Group.findById(groupId);
     if (!group || !group.members.includes(req.user.email) || !group.members.includes(paidTo)) {
-      return res.status(403).json({ error: 'Access denied' });
+      return res.status(403).json({ 
+        status: 'error',
+        message: 'Access denied' 
+      });
     }
 
     const settlement = new Settlement({
@@ -121,13 +157,14 @@ router.post('/create', authenticateUser, async (req, res) => {
     );
 
     // Notify other group members
+    const paidToUserName = paidToUser ? paidToUser.name : paidTo;
     group.members
       .filter(email => email !== req.user.email && email !== paidTo)
       .forEach(email => {
         notificationPromises.push(
           createNotification(
             email,
-            `${req.user.name} settled ${group.currency} ${amount} with ${paidToUser.name} in ${group.name}`,
+            `${req.user.name} settled ${group.currency} ${amount} with ${paidToUserName} in ${group.name}`,
             'settlement_recorded',
             groupId,
             {
@@ -143,12 +180,18 @@ router.post('/create', authenticateUser, async (req, res) => {
     await Promise.all(notificationPromises);
 
     res.status(201).json({
-      settlementId: settlement._id,
-      message: 'Settlement recorded successfully'
+      status: 'success',
+      data: {
+        settlementId: settlement._id,
+        message: 'Settlement recorded successfully'
+      }
     });
   } catch (error) {
     console.error('Create settlement error:', error);
-    res.status(500).json({ error: 'Error creating settlement' });
+    res.status(500).json({ 
+      status: 'error',
+      message: 'Error creating settlement' 
+    });
   }
 });
 
@@ -157,10 +200,21 @@ router.get('/:groupId', authenticateUser, async (req, res) => {
   try {
     const { groupId } = req.params;
     
+    // Validate ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(groupId)) {
+      return res.status(400).json({ 
+        status: 'error',
+        message: 'Invalid group ID format' 
+      });
+    }
+    
     // Verify group exists and user is a member
     const group = await Group.findById(groupId);
     if (!group || !group.members.includes(req.user.email)) {
-      return res.status(403).json({ error: 'Access denied' });
+      return res.status(403).json({ 
+        status: 'error',
+        message: 'Access denied' 
+      });
     }
 
     const settlements = await Settlement.find({ groupId })
@@ -169,7 +223,10 @@ router.get('/:groupId', authenticateUser, async (req, res) => {
     res.json(settlements);
   } catch (error) {
     console.error('Get settlements error:', error);
-    res.status(500).json({ error: 'Error fetching settlements' });
+    res.status(500).json({ 
+      status: 'error',
+      message: 'Error fetching settlements' 
+    });
   }
 });
 

@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const Notification = require('../models/notification.model');
 const { authenticateUser } = require('../middleware/auth.middleware');
 
@@ -43,7 +44,10 @@ router.get('/', authenticateUser, async (req, res) => {
     res.json(notifications);
   } catch (error) {
     console.error('Get notifications error:', error);
-    res.status(500).json({ error: 'Error fetching notifications' });
+    res.status(500).json({ 
+      status: 'error',
+      message: 'Error fetching notifications' 
+    });
   }
 });
 
@@ -67,19 +71,38 @@ router.get('/', authenticateUser, async (req, res) => {
  */
 router.patch('/:notificationId/read', authenticateUser, async (req, res) => {
   try {
-    const notification = await Notification.findById(req.params.notificationId);
+    const { notificationId } = req.params;
+    
+    // Validate ObjectId format
+    if (!mongoose.Types.ObjectId.isValid(notificationId)) {
+      return res.status(400).json({ 
+        status: 'error',
+        message: 'Invalid notification ID format' 
+      });
+    }
+    
+    const notification = await Notification.findById(notificationId);
     
     if (!notification || notification.userId !== req.user.email) {
-      return res.status(404).json({ error: 'Notification not found' });
+      return res.status(404).json({ 
+        status: 'error',
+        message: 'Notification not found' 
+      });
     }
 
     notification.read = true;
     await notification.save();
     
-    res.json({ message: 'Notification marked as read' });
+    res.json({ 
+      status: 'success',
+      message: 'Notification marked as read' 
+    });
   } catch (error) {
     console.error('Mark notification read error:', error);
-    res.status(500).json({ error: 'Error updating notification' });
+    res.status(500).json({ 
+      status: 'error',
+      message: 'Error updating notification' 
+    });
   }
 });
 
