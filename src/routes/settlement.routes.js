@@ -149,9 +149,24 @@ router.post('/create', authenticateUser, async (req, res) => {
         'settlement_received',
         groupId,
         {
-          settlementId: settlement._id,
+          settlementId: settlement._id.toString(),
           amount,
-          paidBy: req.user.email
+          paidBy: req.user.email,
+          paidTo
+        },
+        {
+          title: 'Settlement Received',
+          actor: {
+            email: req.user.email,
+            name: req.user.name,
+            profilePicture: req.user.profilePicture || null
+          },
+          settlementData: {
+            payerName: req.user.name,
+            groupName: group.name,
+            amount,
+            currency: group.currency
+          }
         }
       )
     );
@@ -168,10 +183,24 @@ router.post('/create', authenticateUser, async (req, res) => {
             'settlement_recorded',
             groupId,
             {
-              settlementId: settlement._id,
+              settlementId: settlement._id.toString(),
               amount,
               paidBy: req.user.email,
               paidTo
+            },
+            {
+              title: 'Settlement Recorded',
+              actor: {
+                email: req.user.email,
+                name: req.user.name,
+                profilePicture: req.user.profilePicture || null
+              },
+              settlementData: {
+                payerName: req.user.name,
+                groupName: group.name,
+                amount,
+                currency: group.currency
+              }
             }
           )
         );

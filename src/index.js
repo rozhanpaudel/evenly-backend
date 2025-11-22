@@ -164,6 +164,7 @@ app.use('/expenses', require('./routes/expense.routes'));
 app.use('/balances', require('./routes/balance.routes'));
 app.use('/settlements', require('./routes/settlement.routes'));
 app.use('/notifications', require('./routes/notification.routes'));
+app.use('/preferences', require('./routes/preferences.routes'));
 
 // Swagger documentation route
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
