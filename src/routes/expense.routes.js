@@ -247,14 +247,16 @@ router.post('/create', authenticateUser, upload, async (req, res) => {
 
     await expense.save();
 
-    // Create detailed notifications for all members
+    // Create detailed notifications for all members (with push and email)
     const notificationPromises = group.members
       .filter(email => email !== req.user.email)
       .map(email => {
+        const isInSplit = splitAmongArray.includes(email);
+        const share = isInSplit ? amountNum / splitAmongArray.length : 0;
+        
         let message;
-        if (splitAmongArray.includes(email)) {
+        if (isInSplit) {
           // For members who need to pay
-          const share = amountNum / splitAmongArray.length;
           message = `${req.user.name} added an expense of ${group.currency} ${amountNum} in ${group.name}. Your share: ${group.currency} ${share.toFixed(2)}`;
         } else {
           // For members who are not part of the split
@@ -267,11 +269,30 @@ router.post('/create', authenticateUser, upload, async (req, res) => {
           'expense_added',
           groupId,
           {
-            expenseId: expense._id,
+            expenseId: expense._id.toString(),
             amount: amountNum,
-            share: splitAmongArray.includes(email) ? amountNum / splitAmongArray.length : 0,
+            share,
             paidBy: req.user.email,
-            description
+            description,
+            image: invoice || null
+          },
+          {
+            title: 'New Expense Added',
+            actor: {
+              email: req.user.email,
+              name: req.user.name,
+              profilePicture: req.user.profilePicture || null
+            },
+            expenseData: {
+              userName: req.user.name,
+              groupName: group.name,
+              amount: amountNum,
+              currency: group.currency,
+              share,
+              description,
+              isInSplit,
+              image: invoice || null
+            }
           }
         );
       });

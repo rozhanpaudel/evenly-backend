@@ -28,6 +28,10 @@ const userSchema = new mongoose.Schema({
     default: 'local'
   },
   profilePicture: String,
+  fcmToken: {
+    type: String,
+    sparse: true
+  },
   createdAt: {
     type: Date,
     default: Date.now

@@ -799,4 +799,57 @@ router.post('/refresh', async (req, res) => {
   }
 });
 
+/**
+ * @swagger
+ * /auth/fcm-token:
+ *   post:
+ *     summary: Register or update FCM token for push notifications
+ *     tags: [Auth]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - fcmToken
+ *             properties:
+ *               fcmToken:
+ *                 type: string
+ *                 description: Firebase Cloud Messaging token
+ *     responses:
+ *       200:
+ *         description: FCM token registered successfully
+ *       401:
+ *         description: Unauthorized
+ */
+router.post('/fcm-token', authenticateUser, async (req, res) => {
+  try {
+    const { fcmToken } = req.body;
+
+    if (!fcmToken || typeof fcmToken !== 'string') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'FCM token is required'
+      });
+    }
+
+    req.user.fcmToken = fcmToken;
+    await req.user.save();
+
+    res.json({
+      status: 'success',
+      message: 'FCM token registered successfully'
+    });
+  } catch (error) {
+    console.error('FCM token registration error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Error registering FCM token'
+    });
+  }
+});
+
 module.exports = router; 
