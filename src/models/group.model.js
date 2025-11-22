@@ -10,6 +10,12 @@ const groupSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  category: {
+    type: String,
+    enum: ['personal', 'work', 'travel', 'food', 'entertainment', 'sports', 'others'],
+    default: 'others',
+    required: true
+  },
   members: [{
     type: String,  // email
     ref: 'User'

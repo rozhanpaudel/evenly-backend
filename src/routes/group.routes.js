@@ -38,6 +38,11 @@ const { uploadFile, getGroupImageFolder } = require('../utils/upload.util');
  *           type: string
  *           description: Currency used for expenses in the group
  *           example: USD
+ *         category:
+ *           type: string
+ *           enum: [personal, work, travel, food, entertainment, sports, others]
+ *           description: Category of the group
+ *           example: travel
  *         members:
  *           type: array
  *           items:
@@ -66,6 +71,7 @@ const { uploadFile, getGroupImageFolder } = require('../utils/upload.util');
  *             required:
  *               - name
  *               - currency
+ *               - category
  *               - members
  *             properties:
  *               name:
@@ -78,6 +84,11 @@ const { uploadFile, getGroupImageFolder } = require('../utils/upload.util');
  *               currency:
  *                 type: string
  *                 example: USD
+ *               category:
+ *                 type: string
+ *                 enum: [personal, work, travel, food, entertainment, sports, others]
+ *                 example: travel
+ *                 description: Group category
  *               members:
  *                 type: string
  *                 description: JSON array string of member emails
@@ -164,10 +175,13 @@ const { uploadFile, getGroupImageFolder } = require('../utils/upload.util');
  *         description: Unauthorized
  */
 
+// Valid group categories
+const GROUP_CATEGORIES = ['personal', 'work', 'travel', 'food', 'entertainment', 'sports', 'others'];
+
 // Create a new group
 router.post('/create', authenticateUser, upload, async (req, res) => {
   try {
-    const { name, currency, members } = req.body;
+    const { name, currency, category, members } = req.body;
     let image = null;
     
     // Validate required fields
@@ -182,6 +196,15 @@ router.post('/create', authenticateUser, upload, async (req, res) => {
       return res.status(400).json({ 
         status: 'error',
         message: 'Currency is required' 
+      });
+    }
+    
+    // Validate category
+    const validCategory = category || 'others'; // Default to 'others' if not provided
+    if (!GROUP_CATEGORIES.includes(validCategory)) {
+      return res.status(400).json({ 
+        status: 'error',
+        message: `Invalid category. Must be one of: ${GROUP_CATEGORIES.join(', ')}` 
       });
     }
     
@@ -221,6 +244,7 @@ router.post('/create', authenticateUser, upload, async (req, res) => {
       name,
       image: null, // Will be updated after upload
       currency,
+      category: validCategory,
       members: membersArray
     });
 
@@ -331,6 +355,54 @@ router.get('/', authenticateUser, async (req, res) => {
       message: 'Error fetching groups' 
     });
   }
+});
+
+/**
+ * @swagger
+ * /groups/categories:
+ *   get:
+ *     summary: Get all available group categories
+ *     tags: [Groups]
+ *     responses:
+ *       200:
+ *         description: List of available categories
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   enum: [success]
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       key:
+ *                         type: string
+ *                       label:
+ *                         type: string
+ *                       icon:
+ *                         type: string
+ *                       color:
+ *                         type: string
+ */
+router.get('/categories', (req, res) => {
+  const categories = [
+    { key: 'personal', label: 'Personal', icon: 'home', color: '#1CC29F' },
+    { key: 'work', label: 'Work', icon: 'briefcase', color: '#FF6B6B' },
+    { key: 'travel', label: 'Travel', icon: 'airplane', color: '#4ECDC4' },
+    { key: 'food', label: 'Food', icon: 'restaurant', color: '#FFB84D' },
+    { key: 'entertainment', label: 'Fun', icon: 'game-controller', color: '#A78BFA' },
+    { key: 'sports', label: 'Sports', icon: 'basketball', color: '#F97316' },
+    { key: 'others', label: 'Others', icon: 'ellipsis-horizontal', color: '#9CA3AF' },
+  ];
+  
+  res.json({
+    status: 'success',
+    data: categories
+  });
 });
 
 module.exports = router; 
