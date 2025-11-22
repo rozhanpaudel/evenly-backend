@@ -7,12 +7,12 @@ const settlementSchema = new mongoose.Schema({
     required: true
   },
   paidBy: {
-    type: String,  // uid
+    type: String,  // email
     ref: 'User',
     required: true
   },
   paidTo: {
-    type: String,  // uid
+    type: String,  // email
     ref: 'User',
     required: true
   },

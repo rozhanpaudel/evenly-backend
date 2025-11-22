@@ -168,7 +168,7 @@ router.post('/create', authenticateUser, async (req, res) => {
     const { name, image, currency, members } = req.body;
     
     // Add the creator to members if not included
-    if (!members.includes(req.user.uid)) {
+    if (!members.includes(req.user.email)) {
       members.push(req.user.email);
     }
 
@@ -214,7 +214,7 @@ router.get('/:groupId', authenticateUser, async (req, res) => {
 // Get all groups for user
 router.get('/', authenticateUser, async (req, res) => {
   try {
-    const groups = await Group.find({ members: req.user.uid });
+    const groups = await Group.find({ members: req.user.email });
     res.json(groups);
   } catch (error) {
     console.error('Get groups error:', error);

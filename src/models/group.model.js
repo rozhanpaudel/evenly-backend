@@ -11,7 +11,7 @@ const groupSchema = new mongoose.Schema({
     required: true
   },
   members: [{
-    type: String,  // uid
+    type: String,  // email
     ref: 'User'
   }],
   createdAt: {

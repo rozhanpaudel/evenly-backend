@@ -4,8 +4,8 @@ const process = require('process');
 
 const WORKERS = process.env.WEB_CONCURRENCY || os.cpus().length;
 
-if (cluster.isMaster) {
-  console.log(`Master ${process.pid} is running`);
+if (cluster.isPrimary) {
+  console.log(`Primary process ${process.pid} is running`);
   console.log(`Starting ${WORKERS} workers...`);
 
   // Fork workers

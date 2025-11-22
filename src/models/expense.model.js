@@ -19,12 +19,12 @@ const expenseSchema = new mongoose.Schema({
     required: true
   },
   paidBy: {
-    type: String,  // uid
+    type: String,  // email
     ref: 'User',
     required: true
   },
   splitAmong: [{
-    type: String,  // uid
+    type: String,  // email
     ref: 'User'
   }],
   invoice: String,

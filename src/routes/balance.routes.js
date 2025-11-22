@@ -78,7 +78,8 @@ router.get('/:groupId', authenticateUser, async (req, res) => {
     
     // Verify group exists and user is a member
     const group = await Group.findById(groupId);
-    if (!group || !group.members.includes(req.user.uid)) {
+
+    if (!group || !group.members.includes(req.user.email)) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -102,22 +103,22 @@ router.get('/:groupId', authenticateUser, async (req, res) => {
 router.get('/user/owe', authenticateUser, async (req, res) => {
   try {
     // Get all groups user is member of
-    const groups = await Group.find({ members: req.user.uid });
+    const groups = await Group.find({ members: req.user.email });
     const groupIds = groups.map(group => group._id);
 
     // Get all expenses where user is in splitAmong
     const expenses = await Expense.find({
       groupId: { $in: groupIds },
-      splitAmong: req.user.uid
+      splitAmong: req.user.email
     });
 
     // Get all settlements
     const settlements = await Settlement.find({
       groupId: { $in: groupIds },
-      $or: [{ paidBy: req.user.uid }, { paidTo: req.user.uid }]
+      $or: [{ paidBy: req.user.email }, { paidTo: req.user.email }]
     });
 
-    const oweDetails = calculateUserOwes(req.user.uid, expenses, settlements, groups);
+    const oweDetails = calculateUserOwes(req.user.email, expenses, settlements, groups);
     
     res.json(oweDetails);
   } catch (error) {
@@ -137,24 +138,35 @@ function calculateGroupBalances(members, expenses, settlements) {
 
   // Calculate from expenses
   expenses.forEach(expense => {
+    // Safety check: skip if splitAmong is empty
+    if (!expense.splitAmong || expense.splitAmong.length === 0) {
+      return;
+    }
+    
     const perPersonAmount = expense.amount / expense.splitAmong.length;
     
     expense.splitAmong.forEach(member => {
-      if (member !== expense.paidBy) {
+      if (member !== expense.paidBy && balances[member]) {
         balances[member].owesAmount += perPersonAmount;
-        balances[expense.paidBy].owedAmount += perPersonAmount;
+        if (balances[expense.paidBy]) {
+          balances[expense.paidBy].owedAmount += perPersonAmount;
+        }
       }
     });
   });
 
   // Adjust for settlements
   settlements.forEach(settlement => {
-    balances[settlement.paidBy].owedAmount -= settlement.amount;
-    balances[settlement.paidTo].owesAmount -= settlement.amount;
+    if (balances[settlement.paidBy]) {
+      balances[settlement.paidBy].owedAmount -= settlement.amount;
+    }
+    if (balances[settlement.paidTo]) {
+      balances[settlement.paidTo].owesAmount -= settlement.amount;
+    }
   });
 
-  return Object.entries(balances).map(([uid, balance]) => ({
-    uid,
+  return Object.entries(balances).map(([email, balance]) => ({
+    email,
     ...balance
   }));
 }
@@ -170,6 +182,11 @@ function calculateUserOwes(userId, expenses, settlements, groups) {
 
   // Calculate from expenses
   expenses.forEach(expense => {
+    // Safety check: skip if splitAmong is empty
+    if (!expense.splitAmong || expense.splitAmong.length === 0) {
+      return;
+    }
+    
     if (expense.splitAmong.includes(userId) && expense.paidBy !== userId) {
       const perPersonAmount = expense.amount / expense.splitAmong.length;
       const groupId = expense.groupId.toString();

@@ -35,7 +35,7 @@ const { authenticateUser } = require('../middleware/auth.middleware');
 router.get('/', authenticateUser, async (req, res) => {
   try {
     const notifications = await Notification.find({ 
-      userId: req.user._id 
+      userId: req.user.email 
     })
     .sort({ createdAt: -1 })
     .limit(50);  // Limit to last 50 notifications
@@ -69,7 +69,7 @@ router.patch('/:notificationId/read', authenticateUser, async (req, res) => {
   try {
     const notification = await Notification.findById(req.params.notificationId);
     
-    if (!notification || notification.userId !== req.user._id.toString()) {
+    if (!notification || notification.userId !== req.user.email) {
       return res.status(404).json({ error: 'Notification not found' });
     }
 

@@ -117,6 +117,11 @@ router.post('/create', authenticateUser, async (req, res) => {
   try {
     const { groupId, amount, description, date, splitAmong, invoice } = req.body;
     
+    // Validate splitAmong
+    if (!splitAmong || !Array.isArray(splitAmong) || splitAmong.length === 0) {
+      return res.status(400).json({ error: 'splitAmong must be a non-empty array' });
+    }
+    
     // Verify group exists and user is a member
     const group = await Group.findById(groupId);
     if (!group || !group.members.includes(req.user.email)) {
@@ -357,7 +362,7 @@ router.delete('/:expenseId', authenticateUser, async (req, res) => {
       return res.status(403).json({ error: 'Only the expense creator can delete it' });
     }
 
-    await expense.remove();
+    await Expense.findByIdAndDelete(req.params.expenseId);
     
     res.json({ message: 'Expense deleted successfully' });
   } catch (error) {
@@ -411,6 +416,10 @@ router.get('/detail/:expenseId', authenticateUser, async (req, res) => {
     }, {});
 
     // Calculate individual shares
+    if (!expense.splitAmong || expense.splitAmong.length === 0) {
+      return res.status(400).json({ error: 'Expense has invalid splitAmong data' });
+    }
+    
     const perPersonAmount = expense.amount / expense.splitAmong.length;
     const shares = expense.splitAmong.map(email => ({
       user: {
@@ -449,21 +458,34 @@ function calculateBalances(currentUserEmail, groupMembers, expenses, settlements
 
   // Calculate from expenses
   expenses.forEach(expense => {
+    // Safety check: skip if splitAmong is empty
+    if (!expense.splitAmong || expense.splitAmong.length === 0) {
+      return;
+    }
+    
     const perPersonAmount = expense.amount / expense.splitAmong.length;
     
     // Add amount to person who paid
-    balances[expense.paidBy] += expense.amount;
+    if (balances[expense.paidBy] !== undefined) {
+      balances[expense.paidBy] += expense.amount;
+    }
     
     // Subtract from people who need to pay
     expense.splitAmong.forEach(member => {
-      balances[member] -= perPersonAmount;
+      if (balances[member] !== undefined) {
+        balances[member] -= perPersonAmount;
+      }
     });
   });
 
   // Adjust for settlements
   settlements.forEach(settlement => {
-    balances[settlement.paidBy] += settlement.amount;
-    balances[settlement.paidTo] -= settlement.amount;
+    if (balances[settlement.paidBy] !== undefined) {
+      balances[settlement.paidBy] += settlement.amount;
+    }
+    if (balances[settlement.paidTo] !== undefined) {
+      balances[settlement.paidTo] -= settlement.amount;
+    }
   });
 
   // Format the output
@@ -521,12 +543,19 @@ function calculateExpenseSummary(groupMembers, expenses) {
     summary.monthlyExpenses[monthYear] = (summary.monthlyExpenses[monthYear] || 0) + expense.amount;
 
     // Calculate member statistics
-    memberStats[expense.paidBy].totalPaid += expense.amount;
+    if (memberStats[expense.paidBy]) {
+      memberStats[expense.paidBy].totalPaid += expense.amount;
+    }
     
-    const perPersonShare = expense.amount / expense.splitAmong.length;
-    expense.splitAmong.forEach(member => {
-      memberStats[member].totalShare += perPersonShare;
-    });
+    // Safety check: skip if splitAmong is empty
+    if (expense.splitAmong && expense.splitAmong.length > 0) {
+      const perPersonShare = expense.amount / expense.splitAmong.length;
+      expense.splitAmong.forEach(member => {
+        if (memberStats[member]) {
+          memberStats[member].totalShare += perPersonShare;
+        }
+      });
+    }
   });
 
   // Format member statistics

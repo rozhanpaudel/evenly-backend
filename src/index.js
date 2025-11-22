@@ -11,7 +11,10 @@ const app = express();
 
 // Middleware
 app.use(helmet());
-app.use(cors("*"));
+app.use(cors({
+  origin: process.env.CORS_ORIGIN || '*',
+  credentials: true
+}));
 app.use(express.json());
 
 /**
@@ -168,7 +171,33 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Error:', err);
-  res.status(500).json({ error: 'Something went wrong!' });
+  
+  // Don't send error response if response already sent
+  if (res.headersSent) {
+    return next(err);
+  }
+  
+  // Handle specific error types
+  if (err.name === 'ValidationError') {
+    return res.status(400).json({
+      status: 'error',
+      message: 'Validation error',
+      errors: err.errors
+    });
+  }
+  
+  if (err.name === 'CastError') {
+    return res.status(400).json({
+      status: 'error',
+      message: 'Invalid ID format'
+    });
+  }
+  
+  // Default error response
+  res.status(err.status || 500).json({
+    status: 'error',
+    message: err.message || 'Something went wrong!'
+  });
 });
 
 // Connect to MongoDB with retry logic
@@ -180,8 +209,6 @@ const connectWithRetry = async () => {
   while (retries < MAX_RETRIES) {
     try {
       await mongoose.connect(process.env.MONGODB_URI, {
-        useNewUrlParser: true,
-        useUnifiedTopology: true,
         serverSelectionTimeoutMS: 5000
       });
       console.log(`Worker ${process.pid} connected to MongoDB`);
